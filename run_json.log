@@ -1,0 +1,42 @@
+=== 2D Static Friction Contact Solver ===
+
+Loading scene from /home/misha/leti/sem5/cm/scene.json...
+  Bodies: 4
+  Gravity: 9.81 m/s²
+  Friction coefficient μ: 0.5
+  Regularization ε: 0.001
+
+Detecting contacts...
+  Found 4 contacts
+
+Solving for contact forces (QP formulation)...
+  Solver failed: Problem does not follow DCP rules. Specifically:
+The following constraints are not DCP:
+0.0 @ var1[0] + -0.5 @ var1[0] @ var2[0] / 0.001 + 0.0 @ var1[1] + -0.5 @ var1[1] @ var2[1] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  -0.5 @ var1[0] @ var2[0]
+|--  -0.5 @ var1[1] @ var2[1]
+-9.81 + 1.0 @ var1[0] + -0.0 @ var1[0] @ var2[0] / 0.001 + 1.0 @ var1[1] + -0.0 @ var1[1] @ var2[1] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  -0.0 @ var1[0] @ var2[0]
+|--  -0.0 @ var1[1] @ var2[1]
+-0.5 @ var1[0] + -0.125 @ var1[0] @ var2[0] / 0.001 + 0.5 @ var1[1] + -0.125 @ var1[1] @ var2[1] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  -0.125 @ var1[0] @ var2[0]
+|--  -0.125 @ var1[1] @ var2[1]
+-0.0 @ var1[2] + -0.5 @ var1[2] @ var2[2] / 0.001 + -0.0 @ var1[3] + -0.5 @ var1[3] @ var2[3] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  -0.5 @ var1[2] @ var2[2]
+|--  -0.5 @ var1[3] @ var2[3]
+-9.81 + -1.0 @ var1[2] + 0.0 @ var1[2] @ var2[2] / 0.001 + -1.0 @ var1[3] + 0.0 @ var1[3] @ var2[3] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  0.0 @ var1[2] @ var2[2]
+|--  0.0 @ var1[3] @ var2[3]
+0.5 @ var1[2] + -0.125 @ var1[2] @ var2[2] / 0.001 + 0.5 @ var1[3] + 0.125 @ var1[3] @ var2[3] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  -0.125 @ var1[2] @ var2[2]
+|--  0.125 @ var1[3] @ var2[3]
+0.0 @ var1[2] + 0.5 @ var1[2] @ var2[2] / 0.001 + 0.0 @ var1[3] + 0.5 @ var1[3] @ var2[3] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  0.5 @ var1[2] @ var2[2]
+|--  0.5 @ var1[3] @ var2[3]
+-9.81 + 1.0 @ var1[2] + -0.0 @ var1[2] @ var2[2] / 0.001 + 1.0 @ var1[3] + -0.0 @ var1[3] @ var2[3] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  -0.0 @ var1[2] @ var2[2]
+|--  -0.0 @ var1[3] @ var2[3]
+0.5 @ var1[2] + 0.125 @ var1[2] @ var2[2] / 0.001 + 0.5 @ var1[3] + -0.125 @ var1[3] @ var2[3] / 0.001 == 0.0 , because the following subexpressions are not:
+|--  0.125 @ var1[2] @ var2[2]
+|--  -0.125 @ var1[3] @ var2[3]
+

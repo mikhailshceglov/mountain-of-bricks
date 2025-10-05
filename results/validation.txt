@@ -1,0 +1,46 @@
+=== VALIDATION REPORT ===
+
+ACCEPTANCE CRITERIA:
+  [PASS] A_solver_completed
+  [FAIL] B_force_equilibrium
+  [FAIL] C_moment_equilibrium
+  [PASS] D_non_penetration
+  [FAIL] E_friction_cone
+  [PASS] F_classification
+
+BODY EQUILIBRIUM:
+  Body 0: ‖∑F‖ = 4.712155e-12 N, ‖∑M‖ = 3.421249e-12 N·m
+  Body 1: ‖∑F‖ = 6.230410e-12 N, ‖∑M‖ = 1.289987e-12 N·m
+  Body 2: ‖∑F‖ = 6.376058e-12 N, ‖∑M‖ = 1.090378e-12 N·m
+  Body 3: ‖∑F‖ = 5.804207e-12 N, ‖∑M‖ = 3.550847e-12 N·m
+  Body 4: ‖∑F‖ = 4.897981e-12 N, ‖∑M‖ = 2.871836e-12 N·m
+  Body 5: ‖∑F‖ = 5.092625e-12 N, ‖∑M‖ = 1.498360e-12 N·m
+  Body 6: ‖∑F‖ = 4.817091e-12 N, ‖∑M‖ = 1.061207e-12 N·m
+  Body 7: ‖∑F‖ = 9.168930e+00 N, ‖∑M‖ = 1.430804e-02 N·m
+  Body 8: ‖∑F‖ = 9.974031e+00 N, ‖∑M‖ = 1.952831e-01 N·m
+  Body 9: ‖∑F‖ = 9.894859e+00 N, ‖∑M‖ = 1.063098e-02 N·m
+  Body 10: ‖∑F‖ = 1.002588e+01 N, ‖∑M‖ = 2.816085e-01 N·m
+  Body 11: ‖∑F‖ = 9.733124e+00 N, ‖∑M‖ = 6.094619e-02 N·m
+  Body 12: ‖∑F‖ = 9.974926e+00 N, ‖∑M‖ = 2.076108e-01 N·m
+  Body 13: ‖∑F‖ = 1.007908e+01 N, ‖∑M‖ = 1.610839e-01 N·m
+  Body 14: ‖∑F‖ = 9.881316e+00 N, ‖∑M‖ = 5.142334e-03 N·m
+  Body 15: ‖∑F‖ = 9.813355e+00 N, ‖∑M‖ = 1.525649e-01 N·m
+  Body 16: ‖∑F‖ = 9.756999e+00 N, ‖∑M‖ = 1.440178e-01 N·m
+  Body 17: ‖∑F‖ = 9.903167e+00 N, ‖∑M‖ = 2.186923e-02 N·m
+  Body 18: ‖∑F‖ = 9.857764e+00 N, ‖∑M‖ = 1.152701e-01 N·m
+  Body 19: ‖∑F‖ = 9.710071e+00 N, ‖∑M‖ = 1.630172e-02 N·m
+  Body 20: ‖∑F‖ = 9.759306e+00 N, ‖∑M‖ = 9.901511e-02 N·m
+  Body 21: ‖∑F‖ = 9.831807e+00 N, ‖∑M‖ = 1.207647e-01 N·m
+  Body 22: ‖∑F‖ = 9.791030e+00 N, ‖∑M‖ = 2.659703e-04 N·m
+  Body 23: ‖∑F‖ = 9.859980e+00 N, ‖∑M‖ = 5.082749e-02 N·m
+  Body 24: ‖∑F‖ = 9.747121e+00 N, ‖∑M‖ = 4.874129e-02 N·m
+
+CONTACT CLASSIFICATION:
+  sticking: 48 contacts
+  sliding: 0 contacts
+  near-cone: 36 contacts
+  unknown: 0 contacts
+
+FRICTION CONE VIOLATIONS:
+  Max violation: 3.635069e-05
+  Number of violations: 16
