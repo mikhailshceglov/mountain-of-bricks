@@ -1,36 +1,50 @@
-# solver.py
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-QP-based static contact force solver with slack variables for friction cone (ε-regularized).
+solver.py — QP-решатель контактных сил для 2D статической задачи с трением.
 
-Идея:
-- Переменные: f (все компоненты контактных сил, как правило разложенные на нормали и тангенсы),
-  и s >= 0 — slack по контакту (нарушение конуса трения).
-- Ограничения:
-    A_eq @ f = b_eq                         (равновесие по телам)
-    f_n >= 0                                (нормальные силы неотрицательны)
-    |f_t| <= mu * f_n + s                   (в 2D линейно через две неравенства)
-    s >= 0
-- Цель:
-    0.5 * || W f ||_2^2 + (1/(2ε)) * || s ||_2^2
-  где W = λ I — маленькая Tikhonov-регуляризация сил, ε ~ 1e-3…1e-2.
+Содержит:
+- QPContactSolver: чистый QP (f, s, r)
+- solve_contacts_qp_with_slack: обёртка
+- ContactForceSolver: адаптер под проект (сборка A_eq, b_eq из bodies/contacts)
 
-Результат:
-- Возвращает решение f и s; сохраняет s в contacts_df для последующей валидации.
+Конвенции:
+- На контакт i заводим 2 переменные: fn_i (вдоль нормали n_i, неотриц.) и ft_i (вдоль касательной t_i, со знаком).
+- Вклад в равновесие:
+    для body1:  +fn*n + ft*t
+    для body2:  -(fn*n + ft*t)
+- Внутри сборки мы ортонормируем (n, t) и при необходимости меняем их местами (auto-swap),
+  после чего **записываем исправленные векторы обратно в контакт** (важно для согласованности с CSV/валидацией).
 """
 
 from __future__ import annotations
-from typing import Dict, Iterable, Tuple, Optional
+
+from typing import Iterable, Dict, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 import cvxpy as cp
 
 
+# =============================== QP core ===============================
+
 class QPContactSolver:
     """
-    Контейнер, который принимает на вход уже собранные матрицы равновесия и
-    индексы переменных, соответствующих f_n и f_t, а также dataframe контактов.
+    QP-решатель с slack-переменными для конуса трения и резервом r для равенств.
+
+    Переменные:
+      f ∈ R^n    — все контактные компоненты (обычно [fn_0, ft_0, fn_1, ft_1, ...])
+      s ∈ R^m    — slack по контакту (Ft <= mu*Fn + s), s >= 0
+      r ∈ R^ne   — резерв к равенствам A_eq @ f + r = b_eq (штрафуем сильно)
+
+    Ограничения:
+      A_eq @ f + r = b_eq
+      f_n >= 0
+      -mu*f_n - s <= f_t <= mu*f_n + s
+      s >= 0
+
+    Цель (выпуклая):
+      0.5*lambda*||f||^2  +  (1/(2*eps))*||s||^2  +  (alpha/2)*||r||^2
     """
 
     def __init__(
@@ -38,72 +52,56 @@ class QPContactSolver:
         A_eq: np.ndarray,
         b_eq: np.ndarray,
         contacts_df: pd.DataFrame,
-        idx_n: np.ndarray,
-        idx_t: np.ndarray,
-        mu_per_contact: np.ndarray,
+        idx_n: Iterable[int],
+        idx_t: Iterable[int],
+        mu_per_contact: Iterable[float],
         epsilon: float = 1e-3,
         lambda_reg: float = 1e-6,
         solver_name: str = "OSQP",
     ):
-        """
-        A_eq @ f = b_eq. Вектор f — это все компоненты сил, порядок должен
-        соответствовать idx_n/idx_t.
-
-        idx_n, idx_t — массивы индексов (длины = число контактов).
-        mu_per_contact — массив μ_i по контактам.
-
-        contacts_df — датасет контактов, в который мы добавим столбец 's'.
-        """
         self.A_eq = np.asarray(A_eq, dtype=float)
-        self.b_eq = np.asarray(b_eq, dtype=float)
+        self.b_eq = np.asarray(b_eq, dtype=float).ravel()
         self.contacts_df = contacts_df.copy()
-        self.idx_n = np.asarray(idx_n, dtype=int)
-        self.idx_t = np.asarray(idx_t, dtype=int)
-        self.mu = np.asarray(mu_per_contact, dtype=float)
+        self.idx_n = np.asarray(list(idx_n), dtype=int)
+        self.idx_t = np.asarray(list(idx_t), dtype=int)
+        self.mu = np.asarray(list(mu_per_contact), dtype=float).ravel()
         self.eps = float(epsilon)
         self.lmbd = float(lambda_reg)
-        self.solver_name = solver_name
+        self.solver_name = str(solver_name)
 
-        assert self.A_eq.shape[0] == self.b_eq.shape[0], "A_eq, b_eq shape mismatch"
-        assert self.idx_n.shape == self.idx_t.shape, "idx_n and idx_t must match"
-        assert len(self.mu) == len(self.idx_n), "len(mu) must equal #contacts"
+        assert self.A_eq.shape[0] == self.b_eq.shape[0], "A_eq и b_eq несовместимы по строкам"
+        assert self.idx_n.shape == self.idx_t.shape, "idx_n и idx_t должны иметь одинаковую длину"
+        assert len(self.mu) == len(self.idx_n), "Длина mu должна равняться числу контактов"
 
-        # Размерность f (число компонент сил)
-        self.n_vars = self.A_eq.shape[1]
         self.n_contacts = len(self.idx_n)
+        self.n_vars = self.A_eq.shape[1]
 
-    def solve(self, verbose: bool = False):
-        """
-        Assemble already done in __init__/external; solve QP with:
-        A_eq @ f + r = b_eq,  (r = residuals, heavily penalized)
-        f_n >= 0,
-        |f_t| <= mu f_n + s,
-        s >= 0.
-        Objective: 0.5*lambda*||f||^2 + (1/(2*eps))*||s||^2 + (alpha/2)*||r||^2
-        """
-        n, m = self.n_vars, self.n_contacts
+    def solve(self, verbose: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+        """Решить QP и вернуть (f, s)."""
+        n = self.n_vars
+        m = self.n_contacts
         n_eq = self.A_eq.shape[0]
 
-        f = cp.Variable(n)                   # все компоненты сил
-        s = cp.Variable(m, nonneg=True)      # slack по конусу трения
-        r = cp.Variable(n_eq)                # резерв к равенствам (может быть полож/отриц), штрафуем сильно
+        f = cp.Variable(n)                # все компоненты сил
+        s = cp.Variable(m, nonneg=True)   # slack для конуса трения
+        r = cp.Variable(n_eq)             # резерв к равенствам (может быть +/-)
 
-        # равенства с резервом
-        constraints = [ self.A_eq @ f + r == self.b_eq ]
+        # Равенства с резервом
+        constraints = [self.A_eq @ f + r == self.b_eq]
 
-        # извлекаем f_n и f_t по индексам
+        # Извлекаем f_n и f_t по индексам
         f_n = cp.hstack([f[i] for i in self.idx_n])
         f_t = cp.hstack([f[i] for i in self.idx_t])
 
-        # 2D трение: |f_t| <= mu f_n + s
+        # Конические ограничения (2D): |f_t| <= mu * f_n + s
         constraints += [
             f_n >= 0,
             f_t <= self.mu * f_n + s,
             -f_t <= self.mu * f_n + s,
         ]
 
-        # цель: тикхоновская рег-ция по силам + штраф slack + ОЧЕНЬ большой штраф на r
-        alpha = 1e8  # можно ослабить до 1e6, если будет слишком жёстко
+        # Цель: рег. сил + штраф slack + большой штраф на r
+        alpha = 1e8
         obj = 0.0
         if self.lmbd > 0:
             obj += 0.5 * self.lmbd * cp.sum_squares(f)
@@ -112,37 +110,36 @@ class QPContactSolver:
 
         prob = cp.Problem(cp.Minimize(obj), constraints)
 
-        # попробуем более «терпеливый» солвер; OSQP ок, но ECOS/SCS чаще стабильно решают такое
-        try_order = [self.solver_name.upper()] if self.solver_name else []
-        try_order += [sn for sn in ["ECOS", "OSQP", "SCS"] if sn not in try_order]
+        # Порядок пробуемых солверов
+        order = [self.solver_name.upper()] if self.solver_name else []
+        for sn in ("ECOS", "OSQP", "SCS"):
+            if sn not in order:
+                order.append(sn)
 
         last_err = None
-        for sn in try_order:
+        for sn in order:
             try:
                 prob.solve(solver=getattr(cp, sn), verbose=verbose)
                 if prob.status in ("optimal", "optimal_inaccurate"):
                     break
             except Exception as e:
                 last_err = e
+
         if prob.status not in ("optimal", "optimal_inaccurate"):
             raise RuntimeError(f"QP not solved: status={prob.status}; last_err={last_err}")
 
-        f_val = f.value.astype(float).ravel()
-        s_val = s.value.astype(float).ravel()
-        # r можно вернуть при желании: r_val = r.value.astype(float).ravel()
+        f_val = np.asarray(f.value, dtype=float).ravel()
+        s_val = np.asarray(s.value, dtype=float).ravel()
         return f_val, s_val
 
-
     def write_slack_to_contacts(self, s_val: np.ndarray) -> pd.DataFrame:
-        """Сохраняет s в contacts_df (колонка 's') и возвращает копию."""
+        """Вернуть contacts_df с добавленной колонкой 's' (slack per contact)."""
         df = self.contacts_df.copy()
         if "s" in df.columns:
             df = df.drop(columns=["s"])
-        df.insert(len(df.columns), "s", s_val)
+        df.insert(len(df.columns), "s", np.asarray(s_val, dtype=float))
         return df
 
-
-# ---------- Утилита верхнего уровня (drop-in) ----------
 
 def solve_contacts_qp_with_slack(
     A_eq: np.ndarray,
@@ -157,20 +154,15 @@ def solve_contacts_qp_with_slack(
     verbose: bool = False,
 ) -> Dict[str, object]:
     """
-    Удобная обёртка: решает QP и возвращает словарь:
-      {
-        "f": np.ndarray (решение по всем компонентам сил),
-        "s": np.ndarray (slack по контактам),
-        "contacts_df": pd.DataFrame (contacts_df + колонка 's')
-      }
+    Удобная обёртка вокруг QPContactSolver: возвращает f, s и contacts_df с колонкой 's'.
     """
     solver = QPContactSolver(
         A_eq=A_eq,
         b_eq=b_eq,
         contacts_df=contacts_df,
-        idx_n=np.asarray(list(idx_n), dtype=int),
-        idx_t=np.asarray(list(idx_t), dtype=int),
-        mu_per_contact=np.asarray(list(mu_per_contact), dtype=float),
+        idx_n=idx_n,
+        idx_t=idx_t,
+        mu_per_contact=mu_per_contact,
         epsilon=epsilon,
         lambda_reg=lambda_reg,
         solver_name=solver_name,
@@ -179,20 +171,26 @@ def solve_contacts_qp_with_slack(
     contacts_with_s = solver.write_slack_to_contacts(s_val)
     return {"f": f_val, "s": s_val, "contacts_df": contacts_with_s}
 
-# ====== Adapter to keep old API: ContactForceSolver ======
+
+# =============================== Adapter for project ===============================
 
 class ContactForceSolver:
     """
-    Backward-compatible adapter used by main.py.
-    Builds equilibrium equations from (bodies, contacts), then solves QP with slacks.
-    After solve(), writes results back into each contact:
-        c.f_normal: float
-        c.f_tangent: np.ndarray shape (2,)
-        c.s: float
-        c.classification: str in {"sticking", "near-cone", "sliding"}
-        c.cone_status: str in {"within-cone", "near-cone", "outside-cone"}
-        c.v_tangent: float  (0.0 for static model)
+    Backward-compatible адаптер, используемый main.py.
+
+    Делаает:
+      - собирает систему равновесия A_eq f = b_eq (3 уравнения на тело: Fx, Fy, M);
+      - нормализует (n,t), чинит перепутанные пары (auto-swap), делает t ⟂ n;
+      - решает QP со slack’ами (через QPContactSolver);
+      - записывает силы обратно в объекты контактов:
+            c.f_normal: float (модуль по нормали)
+            c.f_tangent: np.ndarray(2,) мировые компоненты
+            c.s: float (slack)
+            c.v_tangent: 0.0  (статическая постановка)
+            c.classification: sticking/near-cone/sliding
+            c.cone_status: within-cone/near-cone/outside-cone
     """
+
     def __init__(
         self,
         bodies,
@@ -211,155 +209,161 @@ class ContactForceSolver:
         self.solver_name = solver_name
         self.lambda_reg = float(lambda_reg)
 
-        # built during assembly
-        self.idx_n = None
-        self.idx_t = None
-        self.mu_vec = None
-        self.A_eq = None
-        self.b_eq = None
+        # заполнятся в _assemble
+        self.idx_n: Optional[np.ndarray] = None
+        self.idx_t: Optional[np.ndarray] = None
+        self.mu_vec: Optional[np.ndarray] = None
+        self.A_eq: Optional[np.ndarray] = None
+        self.b_eq: Optional[np.ndarray] = None
+
+    # ---------- helpers ----------
+
+    @staticmethod
+    def _orthonormalize_and_fix(nt_pair: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
+        """Ортонормируем n=(nx,ny), t=(tx,ty) и делаем t ⟂ n. Возвращаем (nx,ny,tx,ty)."""
+        nx, ny, tx, ty = nt_pair
+        # нормализуем n
+        nn = (nx * nx + ny * ny) ** 0.5
+        if nn > 0:
+            nx, ny = nx / nn, ny / nn
+        else:
+            nx, ny = 0.0, 1.0
+        # нормализуем t
+        tn = (tx * tx + ty * ty) ** 0.5
+        if tn > 0:
+            tx, ty = tx / tn, ty / tn
+        else:
+            tx, ty = -ny, nx
+        # Gram–Schmidt для t перпендикулярно n
+        dot_nt = nx * tx + ny * ty
+        if abs(dot_nt) > 1e-8:
+            tx, ty = tx - dot_nt * nx, ty - dot_nt * ny
+            tn = (tx * tx + ty * ty) ** 0.5
+            if tn > 0:
+                tx, ty = tx / tn, ty / tn
+            else:
+                tx, ty = -ny, nx
+        return nx, ny, tx, ty
+
+    # ---------- assemble equilibrium ----------
 
     def _assemble(self):
         """
         Build A_eq f = b_eq.
-        Variables: per-contact (fn, ft) => 2*m variables.
-        For each body k: force-x, force-y, moment about body center.
+        Переменные: per-contact (fn, ft) => 2*m variables.
+        Для каждого тела k: строки [Fx=0, Fy=0, M=0].
+        Конвенция знаков (должна совпадать с валидацией!):
+            на body1 действует -F, на body2 действует +F,
+            где F_world = fn * n + ft * t.
         """
-        import numpy as np
+        bodies = self.bodies
+        contacts = self.contacts
+        m = len(contacts)
+        nb = len(bodies)
 
-        m = len(self.contacts)
-        n_bodies = len(self.bodies)
-
-        # variable order: [fn_0, ft_0, fn_1, ft_1, ...]
-        # indices for convenience:
-        idx_n = np.arange(0, 2*m, 2, dtype=int)
-        idx_t = np.arange(1, 2*m, 2, dtype=int)
+        # индексы переменных: [fn0, ft0, fn1, ft1, ...]
+        idx_n = np.arange(0, 2 * m, 2, dtype=int)
+        idx_t = np.arange(1, 2 * m, 2, dtype=int)
         self.idx_n, self.idx_t = idx_n, idx_t
         self.mu_vec = np.full(m, self.mu, dtype=float)
 
-        # Rows: for each body: Fx=0, Fy=0, M=0  => 3*n_bodies equations
-        rows = 3 * n_bodies
+        # матрица/вектор равновесия
+        rows = 3 * nb
         cols = 2 * m
         A = np.zeros((rows, cols), dtype=float)
         b = np.zeros(rows, dtype=float)
 
-        # external forces: gravity on each body
-        # Fx_ext = 0; Fy_ext = -m*g
-        for k, body in enumerate(self.bodies):
-            row_fx = 3*k + 0
-            row_fy = 3*k + 1
-            row_m  = 3*k + 2
-            b[row_fx] = 0.0
-            b[row_fy] = + body.mass * self.g  # move to RHS: sum(contacts) + (0, -mg) = 0  -> b_y = +mg
-            b[row_m]  = 0.0
+        # Правая часть: переносим вес на RHS:
+        #   sum(F_contact) + (0, -mg) = 0   ⇒   b_y = +mg
+        for k, body in enumerate(bodies):
+            b[3 * k + 0] = 0.0
+            b[3 * k + 1] = + body.mass * self.g
+            b[3 * k + 2] = 0.0
 
-        # fill contact contributions for both bodies (body1 ~ A, body2 ~ B)
-        # Force on body1: +fn*n + ft*t
-        # Force on body2: -(fn*n + ft*t)
-        # Moment: r x F, where r = (p - c_body), F as above; z-moment scalar = r_x*F_y - r_y*F_x
-        for i, c in enumerate(self.contacts):
-            # индексы переменных в векторе f
+        # Заполняем по контактам
+        for i, c in enumerate(contacts):
             fn_col = 2 * i
             ft_col = 2 * i + 1
 
-            # геометрия контакта
-            px, py = c.point
-            nx, ny = c.normal
-            tx, ty = c.tangent
+            px, py = float(c.point[0]), float(c.point[1])
+            nx, ny = float(c.normal[0]), float(c.normal[1])
+            tx, ty = float(c.tangent[0]), float(c.tangent[1])
 
-            # --- НОРМАЛИЗАЦИЯ И ОРТОНОРМАЛИЗАЦИЯ (на всякий случай) ---
-            # нормаль
-            n_norm = (nx*nx + ny*ny) ** 0.5
-            if n_norm > 0:
-                nx, ny = nx / n_norm, ny / n_norm
-            else:
-                # fallback: если вдруг норма нулевая — делаем вертикальную нормаль
-                nx, ny = 0.0, 1.0
+            # 1) Ортонормируем (сделаем t ⟂ n и обе единичными)
+            nx, ny, tx, ty = self._orthonormalize_and_fix((nx, ny, tx, ty))
 
-            # тангенс
-            t_norm = (tx*tx + ty*ty) ** 0.5
-            if t_norm > 0:
-                tx, ty = tx / t_norm, ty / t_norm
-            else:
-                # если тангенс не задан, делаем перпендикуляр к n
-                tx, ty = -ny, nx
+            # 2) Геометрически корректируем (n, t)
+            body1 = getattr(c, "body1", None)
+            body2 = getattr(c, "body2", None)
 
-            # делаем t строго перпендикулярным n (Gram-Schmidt 1 шаг)
-            dot_nt = nx*tx + ny*ty
-            if abs(dot_nt) > 1e-8:
-                tx, ty = tx - dot_nt*nx, ty - dot_nt*ny
-                t_norm = (tx*tx + ty*ty) ** 0.5
-                if t_norm > 0:
-                    tx, ty = tx / t_norm, ty / t_norm
-                else:
-                    tx, ty = -ny, nx
-            # --- END НОРМАЛИЗАЦИИ ---
-
-            # --- FIX: авто-swap n↔t, если похоже, что они перепутаны ---
-            # земля: одна сторона контакта отсутствует (None) -> ожидаем вертикальную нормаль (|ny| >= |nx|)
-            body1_is_ground = (getattr(c, "body1", None) is None)
-            body2_is_ground = (getattr(c, "body2", None) is None)
-
-            need_swap = False
-            if body1_is_ground or body2_is_ground:
-                # для опоры "пол": нормаль должна быть ближе к вертикали, чем тангенс
-                # сравниваем "вертикальность" n и t по компоненте |y|
+            if body1 is None or body2 is None:
+                # Контакт с опорой (земля). Хотим нормаль строго "вверх".
+                # Если смотрит вниз — инвертируем обе (n,t) → (−n,−t).
+                if ny < 0:
+                    nx, ny, tx, ty = -nx, -ny, -tx, -ty
+                # Если вдруг вертикаль ушла в t — свапнем их и снова обеспечим ny ≥ 0.
                 if abs(ny) < abs(ty):
-                    need_swap = True
+                    nx, ny, tx, ty = tx, ty, nx, ny
+                    if ny < 0:
+                        nx, ny, tx, ty = -nx, -ny, -tx, -ty
             else:
-                # для кирпич-кирпич: нормаль должна быть "более нормальна", чем t
-                # критерий: модуль проекции на нормальное направление больше для n, чем для t
-                score_n = abs(ny) + 0.1*abs(nx)   # чуть «нагружаем» вертикаль
-                score_t = abs(ty) + 0.1*abs(tx)
-                if score_n < score_t:
-                    need_swap = True
+                # Кирпич–кирпич: нормаль должна быть сонаправлена направлению от body1 к body2.
+                dx = float(body2.x) - float(body1.x)
+                dy = float(body2.y) - float(body1.y)
+                dn = (dx * dx + dy * dy) ** 0.5
+                if dn > 0:
+                    dx, dy = dx / dn, dy / dn
+                else:
+                    # Если центры совпали — возьмём произвольный ориентир
+                    dx, dy = 1.0, 0.0
 
-            if need_swap:
-                nx, ny, tx, ty = tx, ty, nx, ny
-            # --- END FIX ---
+                # Если по направлению между центрами ближе оказывается t, значит n/t перепутаны — свапаем.
+                if abs(nx * dx + ny * dy) < abs(tx * dx + ty * dy):
+                    nx, ny, tx, ty = tx, ty, nx, ny
 
-            # >>> ВСТАВИТЬ: обновить контакт исправленными единичными векторами <<<
-            c.normal  = (float(nx), float(ny))
+                # Добиваемся, чтобы n смотрела из body1 в body2 (n·d >= 0)
+                if (nx * dx + ny * dy) < 0:
+                    nx, ny, tx, ty = -nx, -ny, -tx, -ty
+
+            # 3) Записываем исправленные единичные векторы обратно в контакт (для CSV/визуализации)
+            c.normal = (float(nx), float(ny))
             c.tangent = (float(tx), float(ty))
 
-            # helper: вклад контакта в строки тела (Fx,Fy,M) с указанным знаком
+            # Локальный помощник: добавить вклад в строки тела k со знаком sgn
             def add_body_contrib(body, sgn: float):
-                k = self.bodies.index(body)
-                row_fx = 3*k + 0
-                row_fy = 3*k + 1
-                row_m  = 3*k + 2
+                k = bodies.index(body)
+                row_fx = 3 * k + 0
+                row_fy = 3 * k + 1
+                row_m  = 3 * k + 2
 
-                # вклад по силам
+                # Сила
                 A[row_fx, fn_col] += sgn * nx
                 A[row_fx, ft_col] += sgn * tx
                 A[row_fy, fn_col] += sgn * ny
                 A[row_fy, ft_col] += sgn * ty
 
-                # вклад по моменту: r x F, r = p - c
-                cx, cy = body.x, body.y
+                # Момент вокруг центра тела: r × F, где r = p - c
+                cx, cy = float(body.x), float(body.y)
                 rx, ry = (px - cx), (py - cy)
-                # момент от единичного fn: r x n; от единичного ft: r x t
-                A[row_m, fn_col] += sgn * (rx*ny - ry*nx)
-                A[row_m, ft_col] += sgn * (rx*ty - ry*tx)
+                A[row_m, fn_col] += sgn * (rx * ny - ry * nx)  # r × n
+                A[row_m, ft_col] += sgn * (rx * ty - ry * tx)  # r × t
 
-            # вклад в оба тела (землю/пол пропускаем: body=None)
-            if getattr(c, "body1", None) is not None:
-                add_body_contrib(c.body1, +1.0)
-            if getattr(c, "body2", None) is not None:
-                add_body_contrib(c.body2, -1.0)
+            # Конвенция знаков: на body1 действует -F, на body2 — +F
+            if body1 is not None:
+                add_body_contrib(body1, -1.0)
+            if body2 is not None:
+                add_body_contrib(body2, +1.0)
+
 
         self.A_eq, self.b_eq = A, b
 
-
+    # ---------- solve and write back ----------
 
     def solve(self, verbose: bool = False):
-        """
-        Assemble and solve. Writes back results into contact objects.
-        """
-        import numpy as np
-
+        """Собрать систему, решить QP, записать силы и метаданные обратно в контакты."""
         self._assemble()
 
-        # Build a contacts_df skeleton to carry slack 's' back
+        # skeleton DF для возврата 's' (на всякий случай)
         rows = []
         for i, c in enumerate(self.contacts):
             rows.append({
@@ -375,7 +379,7 @@ class ContactForceSolver:
             })
         contacts_df = pd.DataFrame(rows)
 
-        # Solve QP with slacks
+        # решаем QP
         res = solve_contacts_qp_with_slack(
             A_eq=self.A_eq,
             b_eq=self.b_eq,
@@ -391,25 +395,24 @@ class ContactForceSolver:
         f = res["f"]
         s = res["s"]
 
-        # write back into contacts
+        # записать результаты обратно в объекты контактов
         for i, c in enumerate(self.contacts):
-            fn = float(f[2*i + 0])
-            ft = float(f[2*i + 1])
+            fn = float(f[2 * i + 0])   # скаляр вдоль n
+            ft = float(f[2 * i + 1])   # скаляр вдоль t (со знаком)
 
-            # store as world components consistent with main.py expectations:
             nx, ny = c.normal
             tx, ty = c.tangent
-            c.f_normal = fn  # scalar (magnitude along normal)
-            c.f_tangent = np.array([ft*tx, ft*ty], dtype=float)  # world components
-            c.v_tangent = 0.0  # static model
 
-            # slack
+            # сохранить в формате, который ждёт main.py:
+            c.f_normal = fn
+            c.f_tangent = np.array([ft * tx, ft * ty], dtype=float)  # мировые компоненты
+            c.v_tangent = 0.0  # статическая постановка
             c.s = float(s[i])
 
-            # classification / cone status
+            # классификация и статус конуса (для CSV/визуализации)
             mu = self.mu
-            within = abs(ft) <= mu*max(fn, 0.0) + 1e-9
-            near   = abs(ft) <= mu*max(fn, 0.0) + 5e-4  # small band
+            within = abs(ft) <= mu * max(fn, 0.0) + 1e-9
+            near = abs(ft) <= mu * max(fn, 0.0) + 5e-4
             if within:
                 c.classification = "sticking"
                 c.cone_status = "within-cone"
@@ -417,5 +420,5 @@ class ContactForceSolver:
                 c.classification = "sticking"
                 c.cone_status = "near-cone"
             else:
-                c.classification = "sticking" if c.s <= 1e-6 else "sliding"
+                c.classification = "sliding"
                 c.cone_status = "outside-cone"

@@ -16,7 +16,7 @@ import pandas as pd
 
 from geometry import RigidBody, create_demo_scene
 from contact_detection import detect_contacts
-from solver import ContactForceSolver  # ваш существующий решатель
+from solver import ContactForceSolver  # адаптер, который вызывает QP внутри
 from visualization import visualize_scene
 from validation import validate_and_write_report
 
@@ -43,36 +43,29 @@ def load_scene_from_json(filepath: str):
         "mu": data.get("mu", 0.5),
         "epsilon": data.get("epsilon", 1e-3),
     }
-
     return bodies, params
 
 
 def main():
     parser = argparse.ArgumentParser(description="2D Static Friction Contact Force Solver")
-    parser.add_argument("--mode", choices=["demo", "json"], default="demo",
-                        help="Execution mode: demo (auto-generated) or json (from file)")
-    parser.add_argument("--num-bricks", type=int, default=25,
-                        help="Number of bricks for demo mode (default: 25)")
-    parser.add_argument("--input", type=str, default="scene.json",
-                        help="Input JSON file for json mode")
-    parser.add_argument("--output", type=str, default="results/",
-                        help="Output directory for results")
+    parser.add_argument("--mode", choices=["demo", "json"], default="demo")
+    parser.add_argument("--num-bricks", type=int, default=25)
+    parser.add_argument("--input", type=str, default="scene.json")
+    parser.add_argument("--output", type=str, default="results/")
 
     # физпараметры
-    parser.add_argument("--mu", type=float, default=0.5, help="Friction coefficient (default: 0.5)")
-    parser.add_argument("--epsilon", type=float, default=1e-3, help="Regularization ε (default: 1e-3)")
-    parser.add_argument("--gravity", type=float, default=9.81, help="Gravitational acceleration (default: 9.81)")
+    parser.add_argument("--mu", type=float, default=0.5)
+    parser.add_argument("--epsilon", type=float, default=1e-3)
+    parser.add_argument("--gravity", type=float, default=9.81)
 
-    # настройки решателя (если ваш ContactForceSolver их поддерживает — отлично; если нет, игнорируются)
-    parser.add_argument("--solver", type=str, default="OSQP", choices=["OSQP", "ECOS", "SCS"],
-                        help="Underlying convex solver (default: OSQP)")
-    parser.add_argument("--lambda-reg", type=float, default=1e-6,
-                        help="Tikhonov regularization λ for forces (default: 1e-6)")
+    # настройки решателя
+    parser.add_argument("--solver", type=str, default="OSQP", choices=["OSQP", "ECOS", "SCS"])
+    parser.add_argument("--lambda-reg", type=float, default=1e-6)
 
     # допуски для валидации
-    parser.add_argument("--tol-force", type=float, default=1e-6, help="Force residual tolerance (default: 1e-6)")
-    parser.add_argument("--tol-moment", type=float, default=1e-6, help="Moment residual tolerance (default: 1e-6)")
-    parser.add_argument("--tol-friction", type=float, default=1e-4, help="Friction cone tolerance (default: 1e-4)")
+    parser.add_argument("--tol-force", type=float, default=1e-6)
+    parser.add_argument("--tol-moment", type=float, default=1e-6)
+    parser.add_argument("--tol-friction", type=float, default=1e-4)
 
     args = parser.parse_args()
 
@@ -80,9 +73,9 @@ def main():
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load or generate scene
     print(f"=== 2D Static Friction Contact Solver ===\n")
 
+    # Load or generate scene
     if args.mode == "demo":
         print(f"Generating demo scene with {args.num_bricks} bricks...")
         bodies = create_demo_scene(args.num_bricks)
@@ -93,7 +86,7 @@ def main():
             print(f"Error: Input file '{args.input}' not found!")
             return 1
         bodies, params = load_scene_from_json(args.input)
-        # Override with CLI params if provided
+        # Override from CLI
         params["mu"] = args.mu if args.mu is not None else params["mu"]
         params["epsilon"] = args.epsilon if args.epsilon is not None else params["epsilon"]
         params["gravity"] = args.gravity if args.gravity is not None else params["gravity"]
@@ -135,99 +128,61 @@ def main():
     print("Saving results...")
 
     # CONTACTS -> contact_forces.csv
-    # ожидаемые валидатором колонки:
-    # contact_id, body1_id, body2_id, px, py, nx, ny, tx, ty,
-    # f_normal_x, f_normal_y, f_normal_mag,
-    # f_tangent_x, f_tangent_y, f_tangent_mag,
-    # mu, [s], v_tangent, classification, cone_status
-    contact_rows = []
+    rows = []
     for i, c in enumerate(contacts):
         b1_id = bodies.index(c.body1) if getattr(c, "body1", None) is not None else -1
         b2_id = bodies.index(c.body2) if getattr(c, "body2", None) is not None else -1
 
-        px, py = c.point  # точка контакта
+        px, py = c.point
         nx, ny = c.normal
         tx, ty = c.tangent
 
-        # силы: у вас в объекте контакта были: c.f_normal (скаляр) и c.f_tangent (вектор 2D)
-        # восстановим компонентную и модульную форму
         fN_mag = float(getattr(c, "f_normal", 0.0))
         fT_vec = np.asarray(getattr(c, "f_tangent", (0.0, 0.0)), dtype=float)
         fT_mag = float(np.linalg.norm(fT_vec))
-
-        fN_x = fN_mag * nx
-        fN_y = fN_mag * ny
-        fT_x = float(fT_vec[0])
-        fT_y = float(fT_vec[1])
-
-        # slack (если в контакте есть поле s/slack — сохраним; иначе 0.0)
-        s_val = None
-        if hasattr(c, "s"):
-            s_val = float(c.s) if c.s is not None else 0.0
-        elif hasattr(c, "slack"):
-            s_val = float(c.slack) if c.slack is not None else 0.0
+        fN_x, fN_y = fN_mag * nx, fN_mag * ny
+        fT_x, fT_y = float(fT_vec[0]), float(fT_vec[1])
 
         row = {
             "contact_id": i,
-            "body1_id": b1_id,
-            "body2_id": b2_id,
-            "px": float(px),
-            "py": float(py),
-            "nx": float(nx),
-            "ny": float(ny),
-            "tx": float(tx),
-            "ty": float(ty),
-            "f_normal_x": fN_x,
-            "f_normal_y": fN_y,
-            "f_normal_mag": fN_mag,
-            "f_tangent_x": fT_x,
-            "f_tangent_y": fT_y,
-            "f_tangent_mag": fT_mag,
+            "body1_id": b1_id, "body2_id": b2_id,
+            "px": float(px), "py": float(py),
+            "nx": float(nx), "ny": float(ny),
+            "tx": float(tx), "ty": float(ty),
+            "f_normal_x": fN_x, "f_normal_y": fN_y, "f_normal_mag": fN_mag,
+            "f_tangent_x": fT_x, "f_tangent_y": fT_y, "f_tangent_mag": fT_mag,
             "mu": float(params["mu"]),
             "v_tangent": float(getattr(c, "v_tangent", 0.0)),
             "classification": getattr(c, "classification", "unknown"),
             "cone_status": getattr(c, "cone_status", "unknown"),
         }
-        if s_val is not None:
-            row["s"] = s_val
+        # slack (если решатель его записал в контакт)
+        if hasattr(c, "s") and c.s is not None:
+            row["s"] = float(c.s)
 
-        contact_rows.append(row)
+        rows.append(row)
 
-    contacts_df = pd.DataFrame(contact_rows)
-    contact_file = output_dir / "contact_forces.csv"
-    contacts_df.to_csv(contact_file, index=False)
-    print(f"  Contact forces: {contact_file}")
+    pd.DataFrame(rows).to_csv(output_dir / "contact_forces.csv", index=False)
+    print(f"  Contact forces: {output_dir / 'contact_forces.csv'}")
 
-    # BODIES -> body_forces.csv
-    # Эти поля валидатор позднее перезапишет корректными суммами,
-    # но базовую информацию (mass, x, y) важно сохранить.
+    # BODIES -> body_forces.csv (базовые поля; суммы пересчитает валидация)
     body_rows = []
     for i, body in enumerate(bodies):
-        # Если ваш старый validate_solution уже посчитал эти поля — используем;
-        # иначе — нули, их пересчитает validate_and_write_report.
-        total_force = getattr(body, "total_force", (0.0, 0.0))
-        total_moment = getattr(body, "total_moment", 0.0)
-        force_residual = getattr(body, "force_residual", 0.0)
-        moment_residual = getattr(body, "moment_residual", 0.0)
-
         body_rows.append({
             "body_id": i,
             "mass": float(body.mass),
             "x": float(body.x),
             "y": float(body.y),
-            "total_fx": float(total_force[0]) if isinstance(total_force, (list, tuple, np.ndarray)) else float(total_force),
-            "total_fy": float(total_force[1]) if isinstance(total_force, (list, tuple, np.ndarray)) else 0.0,
-            "total_moment": float(total_moment),
-            "force_residual": float(force_residual),
-            "moment_residual": float(moment_residual),
+            "total_fx": 0.0,
+            "total_fy": 0.0,
+            "total_moment": 0.0,
+            "force_residual": 0.0,
+            "moment_residual": 0.0,
         })
+    pd.DataFrame(body_rows).to_csv(output_dir / "body_forces.csv", index=False)
+    print(f"  Body summaries: {output_dir / 'body_forces.csv'}")
 
-    bodies_df = pd.DataFrame(body_rows)
-    body_file = output_dir / "body_forces.csv"
-    bodies_df.to_csv(body_file, index=False)
-    print(f"  Body summaries: {body_file}")
-
-    # ---------- Validation (пересчитает суммы и сформирует отчёт) ----------
+    # ---------- Validation ----------
     print("\nValidating solution & writing report...")
     acceptance = validate_and_write_report(
         out_dir=output_dir,
