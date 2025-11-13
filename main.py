@@ -1,215 +1,124 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Main entry point for 2D static friction contact solver.
-Handles CLI, scene generation, solving, and output.
-"""
-
-import argparse
-import json
-import os
-import sys
-from pathlib import Path
-
 import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
+from brick import Brick
+from contact_detector import ContactDetector
+from contact_solver import ContactSolver
 
-from geometry import RigidBody, create_demo_scene
-from contact_detection import detect_contacts
-from solver import ContactForceSolver  # адаптер, который вызывает QP внутри
-from visualization import visualize_scene
-from validation import validate_and_write_report
+def create_brick_wall():
+    """Создаёт тестовую стену из кирпичей"""
+    bricks = []
+    
+    # Основание
+    bricks.append(Brick(0, 0, 2, 0.5, mass=5))
+    bricks.append(Brick(2, 0, 2, 0.5, mass=5))
+    
+    # Второй ряд
+    bricks.append(Brick(1, 0.5, 2, 0.5, mass=4))
+    
+    # Третий ряд  
+    bricks.append(Brick(0.5, 1.0, 2, 0.5, mass=4))
+    
+    # Четвёртый ряд (нестабильный)
+    bricks.append(Brick(1.5, 1.5, 2, 0.5, mass=3))
+    
+    return bricks
 
-
-def load_scene_from_json(filepath: str):
-    """Load scene configuration from JSON file."""
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    bodies = []
-    for b in data["bodies"]:
-        body = RigidBody(
-            x=b["x"],
-            y=b["y"],
-            width=b["width"],
-            height=b["height"],
-            angle=b.get("angle", 0.0),
-            mass=b["mass"],
-        )
-        bodies.append(body)
-
-    params = {
-        "gravity": data.get("gravity", 9.81),
-        "mu": data.get("mu", 0.5),
-        "epsilon": data.get("epsilon", 1e-3),
-    }
-    return bodies, params
-
+def create_brick_arch():
+    """Создаёт арку из кирпичей"""
+    bricks = []
+    
+    # Основание
+    bricks.append(Brick(0, 0, 1, 0.3, mass=3))
+    bricks.append(Brick(3, 0, 1, 0.3, mass=3))
+    
+    # Опоры
+    bricks.append(Brick(0.5, 0.3, 0.8, 0.3, mass=2))
+    bricks.append(Brick(2.7, 0.3, 0.8, 0.3, mass=2))
+    
+    # Замковый камень
+    bricks.append(Brick(1.4, 0.6, 1.2, 0.3, mass=4))
+    
+    return bricks
 
 def main():
-    parser = argparse.ArgumentParser(description="2D Static Friction Contact Force Solver")
-    parser.add_argument("--mode", choices=["demo", "json"], default="demo")
-    parser.add_argument("--num-bricks", type=int, default=25)
-    parser.add_argument("--input", type=str, default="scene.json")
-    parser.add_argument("--output", type=str, default="results/")
-
-    # физпараметры
-    parser.add_argument("--mu", type=float, default=0.5)
-    parser.add_argument("--epsilon", type=float, default=1e-3)
-    parser.add_argument("--gravity", type=float, default=9.81)
-
-    # настройки решателя
-    parser.add_argument("--solver", type=str, default="OSQP", choices=["OSQP", "ECOS", "SCS"])
-    parser.add_argument("--lambda-reg", type=float, default=1e-6)
-
-    # допуски для валидации
-    parser.add_argument("--tol-force", type=float, default=1e-6)
-    parser.add_argument("--tol-moment", type=float, default=1e-6)
-    parser.add_argument("--tol-friction", type=float, default=1e-4)
-
-    args = parser.parse_args()
-
-    # Create output directory
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"=== 2D Static Friction Contact Solver ===\n")
-
-    # Load or generate scene
-    if args.mode == "demo":
-        print(f"Generating demo scene with {args.num_bricks} bricks...")
-        bodies = create_demo_scene(args.num_bricks)
-        params = {"gravity": args.gravity, "mu": args.mu, "epsilon": args.epsilon}
-    else:
-        print(f"Loading scene from {args.input}...")
-        if not os.path.exists(args.input):
-            print(f"Error: Input file '{args.input}' not found!")
-            return 1
-        bodies, params = load_scene_from_json(args.input)
-        # Override from CLI
-        params["mu"] = args.mu if args.mu is not None else params["mu"]
-        params["epsilon"] = args.epsilon if args.epsilon is not None else params["epsilon"]
-        params["gravity"] = args.gravity if args.gravity is not None else params["gravity"]
-
-    print(f"  Bodies: {len(bodies)}")
-    print(f"  Gravity: {params['gravity']} m/s²")
-    print(f"  Friction coefficient μ: {params['mu']}")
-    print(f"  Regularization ε: {params['epsilon']}\n")
-
-    # Detect contacts
-    print("Detecting contacts...")
-    contacts = detect_contacts(bodies)
-    print(f"  Found {len(contacts)} contacts\n")
-
-    if len(contacts) == 0:
-        print("Warning: No contacts detected. Check scene configuration.")
-        return 1
-
-    # Solve for contact forces
-    print("Solving for contact forces (QP formulation)...")
-    solver = ContactForceSolver(
-        bodies=bodies,
-        contacts=contacts,
-        mu=params["mu"],
-        epsilon=params["epsilon"],
-        gravity=params["gravity"],
-        solver_name=getattr(args, "solver", "OSQP"),
-        lambda_reg=getattr(args, "lambda_reg", 1e-6),
-    )
-
-    try:
-        solver.solve()
-        print("  Solver converged successfully\n")
-    except Exception as e:
-        print(f"  Solver failed: {e}\n")
-        return 1
-
-    # ---------- Save results (CSV) ----------
-    print("Saving results...")
-
-    # CONTACTS -> contact_forces.csv
-    rows = []
-    for i, c in enumerate(contacts):
-        b1_id = bodies.index(c.body1) if getattr(c, "body1", None) is not None else -1
-        b2_id = bodies.index(c.body2) if getattr(c, "body2", None) is not None else -1
-
-        px, py = c.point
-        nx, ny = c.normal
-        tx, ty = c.tangent
-
-        fN_mag = float(getattr(c, "f_normal", 0.0))
-        fT_vec = np.asarray(getattr(c, "f_tangent", (0.0, 0.0)), dtype=float)
-        fT_mag = float(np.linalg.norm(fT_vec))
-        fN_x, fN_y = fN_mag * nx, fN_mag * ny
-        fT_x, fT_y = float(fT_vec[0]), float(fT_vec[1])
-
-        row = {
-            "contact_id": i,
-            "body1_id": b1_id, "body2_id": b2_id,
-            "px": float(px), "py": float(py),
-            "nx": float(nx), "ny": float(ny),
-            "tx": float(tx), "ty": float(ty),
-            "f_normal_x": fN_x, "f_normal_y": fN_y, "f_normal_mag": fN_mag,
-            "f_tangent_x": fT_x, "f_tangent_y": fT_y, "f_tangent_mag": fT_mag,
-            "mu": float(params["mu"]),
-            "v_tangent": float(getattr(c, "v_tangent", 0.0)),
-            "classification": getattr(c, "classification", "unknown"),
-            "cone_status": getattr(c, "cone_status", "unknown"),
-        }
-        # slack (если решатель его записал в контакт)
-        if hasattr(c, "s") and c.s is not None:
-            row["s"] = float(c.s)
-
-        rows.append(row)
-
-    pd.DataFrame(rows).to_csv(output_dir / "contact_forces.csv", index=False)
-    print(f"  Contact forces: {output_dir / 'contact_forces.csv'}")
-
-    # BODIES -> body_forces.csv (базовые поля; суммы пересчитает валидация)
-    body_rows = []
-    for i, body in enumerate(bodies):
-        body_rows.append({
-            "body_id": i,
-            "mass": float(body.mass),
-            "x": float(body.x),
-            "y": float(body.y),
-            "total_fx": 0.0,
-            "total_fy": 0.0,
-            "total_moment": 0.0,
-            "force_residual": 0.0,
-            "moment_residual": 0.0,
-        })
-    pd.DataFrame(body_rows).to_csv(output_dir / "body_forces.csv", index=False)
-    print(f"  Body summaries: {output_dir / 'body_forces.csv'}")
-
-    # ---------- Validation ----------
-    print("\nValidating solution & writing report...")
-    acceptance = validate_and_write_report(
-        out_dir=output_dir,
-        tol_force=args.tol_force,
-        tol_moment=args.tol_moment,
-        tol_fric=args.tol_friction,
-        g=args.gravity,
-    )
-    print(f"  Validation report: {output_dir / 'validation.txt'}")
-
-    # Visualization
-    print("\nGenerating visualization...")
-    viz_file = output_dir / "visualization.png"
-    visualize_scene(bodies, contacts, str(viz_file))
-    print(f"  Visualization: {viz_file}")
-
-    # Summary
-    print("\n=== SUMMARY ===")
-    all_pass = all(v == "PASS" for v in acceptance.values())
-    if all_pass:
-        print("✓ All acceptance criteria PASSED")
-    else:
-        print("✗ Some acceptance criteria FAILED (see validation.txt)")
-
-    print(f"\nResults saved to: {output_dir}/")
-    return 0 if all_pass else 1
-
+    # Создаём кирпичи
+    bricks = create_brick_wall()
+    # bricks = create_brick_arch()  # Раскомментируйте для теста арки
+    
+    # Обнаруживаем контакты
+    detector = ContactDetector()
+    contacts, ground_contacts = detector.detect_contacts(bricks)
+    
+    print(f"Обнаружено контактов: {len(contacts)}")
+    print(f"Контактов с землёй: {len(ground_contacts)}")
+    
+    # Решаем контактные силы
+    solver = ContactSolver(bricks, contacts, ground_contacts)
+    success = solver.solve()
+    
+    if success:
+        print("Силы успешно вычислены!")
+        
+        # Анализируем устойчивость
+        critical, safe = solver.analyze_stability()
+        print(f"Критических контактов: {len(critical)}")
+        print(f"Безопасных контактов: {len(safe)}")
+        
+        for contact, safety in critical:
+            print(f"Контакт {contact.id}: запас прочности {safety:.2f}")
+    
+    # Визуализация
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Левая панель - кирпичи и силы
+    ax1.set_title('Кирпичи и силы')
+    ax1.set_aspect('equal')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlabel('X')
+    ax1.set_ylabel('Y')
+    
+    # Рисуем землю
+    ax1.axhline(y=0, color='brown', linewidth=2, label='Земля')
+    
+    # Рисуем кирпичи и силы
+    force_scale = 0.01  # Масштаб для отображения сил
+    for brick in bricks:
+        brick.draw(ax1, force_scale)
+    
+    # Рисуем контакты
+    for contact in contacts + ground_contacts:
+        color = 'red' if contact.is_slipping() else 'green'
+        ax1.plot(contact.point[0], contact.point[1], 'o', color=color, markersize=6)
+        
+        # Подпись контакта
+        ax1.text(contact.point[0], contact.point[1] + 0.1, 
+                f'{contact.id}', fontsize=8, ha='center')
+    
+    ax1.legend()
+    
+    # Правая панель - информация о силах
+    ax2.set_title('Информация о силах')
+    ax2.axis('off')
+    
+    # Выводим информацию о силах
+    info_text = "СИЛЫ В КОНТАКТАХ:\n\n"
+    
+    for i, contact in enumerate(contacts + ground_contacts[:10]):  # Показываем первые 10
+        brick_b_name = "Земля" if not hasattr(contact.brick_b, 'id') else f"Кирпич {contact.brick_b.id}"
+        info_text += f"Контакт {contact.id}: {contact.brick_a.id} -> {brick_b_name}\n"
+        info_text += f"  Нормальная: {contact.normal_force:.2f} N\n"
+        info_text += f"  Тангенциальная: {contact.tangent_force:.2f} N\n"
+        info_text += f"  Запас прочности: {contact.get_safety_factor():.2f}\n"
+        info_text += f"  Проскальзывает: {'ДА' if contact.is_slipping() else 'нет'}\n\n"
+    
+    if len(contacts + ground_contacts) > 10:
+        info_text += f"... и ещё {len(contacts + ground_contacts) - 10} контактов"
+    
+    ax2.text(0.1, 0.9, info_text, transform=ax2.transAxes, fontsize=9, 
+             verticalalignment='top', fontfamily='monospace')
+    
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
