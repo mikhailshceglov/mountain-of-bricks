@@ -1,0 +1,49 @@
+{
+  "bricks": [
+    {
+      "id": 1,
+      "x": 0,
+      "y": 0,
+      "width": 2,
+      "height": 1,
+      "angle": 0,
+      "mass": 1.0
+    },
+    {
+      "id": 2,
+      "x": 2,
+      "y": 0,
+      "width": 2,
+      "height": 1,
+      "angle": 0,
+      "mass": 1.0
+    },
+    {
+      "id": 3,
+      "x": 1,
+      "y": 1,
+      "width": 2,
+      "height": 1,
+      "angle": 0,
+      "mass": 1.0
+    },
+    {
+      "id": 4,
+      "x": 0,
+      "y": 2,
+      "width": 2,
+      "height": 1,
+      "angle": 0,
+      "mass": 1.0
+    },
+    {
+      "id": 5,
+      "x": 2,
+      "y": 2,
+      "width": 2,
+      "height": 1,
+      "angle": 0,
+      "mass": 1.0
+    }
+  ]
+}
