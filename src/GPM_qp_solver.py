@@ -42,11 +42,10 @@ def project_to_friction_cone(lambda_vec: np.ndarray, mu: float) -> np.ndarray:
 
     Важно: функция возвращает НОВЫЙ массив (копию), не модифицируя входной вектор in-place.
     """
-    # Создаем копию входного вектора λ и приводим к 1D форме
     lam = np.array(lambda_vec, dtype=float, copy=True).reshape(-1)
     N = lam.shape[0]
     if N == 0:
-        return lam  # нет контактов, возвращаем пустой вектор
+        return lam
 
     # Число контактов
     N_contacts = N // 2
@@ -106,7 +105,6 @@ def solve_soft_qp_equilibrium(
     """
     # Приведение Q к одномерному массиву нужной длины
     Q_vec = np.array(Q, dtype=float).reshape(-1)
-    # Проверка размерностей J_T и Q
     if not isinstance(J_T, np.ndarray):
         J_T = np.array(J_T, dtype=float)
     if J_T.ndim != 2:
@@ -119,9 +117,7 @@ def solve_soft_qp_equilibrium(
         equilibrium_error = np.linalg.norm(Q_vec)
         return (np.array([], dtype=float), "no_contacts", 0.0, equilibrium_error)
     if N % 2 != 0:
-        # Ожидалось, что N = 2 * N_contacts
         return (np.array([], dtype=float), "bad_input", np.nan, np.nan)
-    # Инициализация λ
     if lambda_init is not None:
         lambda_vec = np.array(lambda_init, dtype=float).reshape(-1)
         if lambda_vec.shape[0] != N:
@@ -129,15 +125,13 @@ def solve_soft_qp_equilibrium(
     else:
         lambda_vec = np.zeros(N, dtype=float)
 
-    # Предварительный расчет матрицы J (размер N x M) как транспонированной J_T
     J = J_T.T
 
     status = "max_iters"
     # Итерационный процесс проекционного градиентного спуска
     for iter_num in range(1, config.max_iters + 1):
-        # Вычисляем остаток равновесия и градиент цели
-        eq_residual = J_T @ lambda_vec + Q_vec  # размерность (M,)
-        grad = J @ eq_residual + config.epsilon_reg * lambda_vec  # размерность (N,)
+        eq_residual = J_T @ lambda_vec + Q_vec  
+        grad = J @ eq_residual + config.epsilon_reg * lambda_vec
         # Проверяем критерии сходимости
         norm_grad = np.linalg.norm(grad)
         norm_eq = np.linalg.norm(eq_residual)
@@ -147,12 +141,10 @@ def solve_soft_qp_equilibrium(
             # Шаг градиента с проекцией на конус трения
         lambda_half = lambda_vec - config.step_size * grad
         lambda_vec = project_to_friction_cone(lambda_half, mu)
-        # Вывод прогресса каждые 1000 итераций, если verbose=True
         if config.verbose and iter_num % 1000 == 0:
             obj_value = 0.5 * (norm_eq ** 2) + 0.5 * config.epsilon_reg * (np.linalg.norm(lambda_vec) ** 2)
             print(f"Iteration {iter_num}: norm_grad={norm_grad:.3e}, norm_eq={norm_eq:.3e}, objective={obj_value:.3e}")
 
-    # Финальные вычисления после завершения итераций
     eq_residual = J_T @ lambda_vec + Q_vec
     equilibrium_error = np.linalg.norm(eq_residual)
     objective_value = 0.5 * (equilibrium_error ** 2) + 0.5 * config.epsilon_reg * (np.linalg.norm(lambda_vec) ** 2)
