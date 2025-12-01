@@ -6,15 +6,15 @@ from typing import List, Tuple
 import numpy as np
 
 def calculate_inertia(mass: float, width: float, height: float) -> float:
-    #вычисляем момент инерции
-    #I = (1/12) * M * (w^2 + h^2)
+    # вычисляем момент инерции
+    # I = (1/12) * M * (w^2 + h^2)
     if mass <= 0 or width <= 0 or height <= 0:
         return 0.0
     return (1.0 / 12.0) * mass * (width**2 + height**2)
 
 @dataclass
 class BrickConfig:
-    #конфигурация кирпичей
+    # конфигурация кирпичей
     id: int
     description: str
     N_bricks: int
@@ -33,11 +33,10 @@ class BrickConfig:
     
     @classmethod
     def from_dict(cls, config_dict):
-        #конфигурация из словаря
+        # конфигурация из словаря
         return cls(
             id=config_dict.get('id', 0),
             description=config_dict.get('description', 'Unknown'),
-            # Добавлено автоматическое определение N_bricks
             N_bricks=config_dict.get('N_bricks', len(config_dict.get('R_list', []))), 
             mu=config_dict.get('mu', 0.5),
             epsilon=config_dict.get('epsilon', 0.0001),
@@ -59,7 +58,7 @@ def load_config_from_file(filename: str) -> BrickConfig:
         except json.JSONDecodeError as e:
             raise ValueError(f"ошибка в файле '{filename}': {e}")
     
-    #проверка обязательных полей
+    # проверка обязательных полей
     required_fields = ['R_list', 'width', 'height', 'mass']
     for field in required_fields:
         if field not in config_dict:
@@ -74,7 +73,7 @@ def main():
     filename = sys.argv[1]
     
     try:
-        #загрузка конфигурации
+        # загрузка конфигурации
         config = load_config_from_file(filename)
         
         print(f"данные загружены из '{filename}'")

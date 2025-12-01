@@ -1,10 +1,21 @@
 import argparse
 import sys
 import os
+
+# === ДОБАВЛЯЕМ src В PYTHONPATH ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(BASE_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
 from load_config import load_config_from_file
 from contact_finder import analyze_contacts, Contact
 from visualization import BrickVisualizer
-from system_solver import solve_qp_equilibrium, analyze_equilibrium_stability, print_equilibrium_analysis
+from system_solver import (
+    solve_qp_equilibrium,
+    analyze_equilibrium_stability,
+    print_equilibrium_analysis,
+)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -43,7 +54,7 @@ def main():
         #=визуализируем конфигурацию
         visualizer = BrickVisualizer()
 
-        visualizer.visualize_config(config, contact, analysis)
+        visualizer.visualize_system(config, contact, analysis)
         
         print("визуализация завершена успешно")
         
