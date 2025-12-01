@@ -159,9 +159,6 @@ MANUAL_APPROX_VIS_TOL: float = 1e1
 
 ## Демонстрация результатов
 
-Ниже — места для вставки скриншотов результатов работы программы.
-Предполагается, что вы сохраните изображения в папку `results/` и вставите сюда ссылки.
-
 ### 1. Стенка под углом — `leaning_wall.json`
 
 ![leaning_wall](picture/leaning.png)
@@ -170,38 +167,17 @@ MANUAL_APPROX_VIS_TOL: float = 1e1
 
 ### 2. Летающий кирпич — `flying_brick.json`
 
-(Здесь будет картинка с визуализацией сцены `flying_brick.json`)
-
-Пример вставки позже:
-
-```markdown
 ![flying_brick](picture/flying_bricks.png)
-*Конфигурация: flying_brick.json*
-```
 
 ---
 
 ### 3. Стопка кирпичей — `stack.json`
 
-(Здесь будет картинка с визуализацией сцены `stack.json`)
-
-Пример вставки позже:
-
-```markdown
 ![stack](picture/stack.png)
-*Конфигурация: stack.json*
-```
 
 ---
 
-### 4. Большой вынос — `overhang4.json`
+### 4. Лестница — `overhang4.json`
 
-(Здесь будет картинка с визуализацией сцены `overhang4.json`)
-
-Пример вставки позже:
-
-```markdown
 ![overhang4](picture/overhang4.png)
-*Конфигурация: overhang4.json*
-```
 
