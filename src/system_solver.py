@@ -6,9 +6,10 @@ from dataclasses import dataclass
 # Если False — используем готовый QP-решатель cvxopt.solvers.qp.
 USE_MANUAL_SOLVER: bool = True
 
+
 # Отдельные настройки точности для самописного и готового солверов
 MANUAL_TOL_GRAD: float = 1e-4
-MANUAL_TOL_EQ: float = 1e-2
+MANUAL_TOL_EQ: float = 1e-6
 MANUAL_MAX_ITERS: int = 5000
 MANUAL_EPSILON_REG: float = 1e-4
 

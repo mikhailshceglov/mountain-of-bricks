@@ -239,7 +239,7 @@ class ContactAnalyzer:
             brick_edges.append(edges)
         
         # центры масс
-        #self.brick_centers = [(r[0], r[1]) for r in config.R_list]
+        self.brick_centers = [(r[0], r[1]) for r in config.R_list]
         
         # входит ли кирпич в землю
         underground_bricks = self.check_underground_bricks(brick_corners)
@@ -261,6 +261,8 @@ class ContactAnalyzer:
                 brick2_corners = brick_corners[j]
                 brick1_edges = brick_edges[i]
                 brick2_edges = brick_edges[j]
+                r1_x = self.brick_centers[i][0]
+                r2_x = self.brick_centers[j][0]
                 
                 # угол-угол
                 for corner1 in brick1_corners:
@@ -268,9 +270,15 @@ class ContactAnalyzer:
                         distance = np.sqrt((corner1[0] - corner2[0])**2 + (corner1[1] - corner2[1])**2)
                         if distance <= self.tolerance:
                             
-                            # нормаль - вектор от центра контакта к цм1 
-                            # тангенс - перпендикуляр к нему.
                             contact_point = ((corner1[0] + corner2[0]) / 2, (corner1[1] + corner2[1]) / 2)
+                            p_x, p_y = contact_point
+                    
+                            # dx1: направление от контакта к центру масс кирпичей
+                            dx1 = r1_x - p_x
+                            dx2 = r2_x - p_x
+
+                            if dx1 * dx2 < 0: 
+                                continue
                             
                             # вектор от угла2 к углу1
                             v_x = corner1[0] - corner2[0]

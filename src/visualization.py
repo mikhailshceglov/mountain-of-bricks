@@ -59,6 +59,21 @@ class BrickVisualizer:
             # рисуем точку контакта 
             contact_circle = Circle((x, y), radius=radius, color=color, alpha=0.8, zorder=10)
             self.ax.add_patch(contact_circle)
+    def draw_gravity_forces_no_qp(self, config: 'BrickConfig', max_force_length: float = 0.2):
+        ABSOLUTE_HEAD_WIDTH = 0.04
+        ABSOLUTE_HEAD_LENGTH = 0.08
+
+        scale=0.02
+
+        for i, r in enumerate(config.R_list):
+            x, y = r[0], r[1] 
+
+            g_force = -config.mass * config.g
+            
+            # длина вектора в масштабе
+            dy = g_force * scale 
+
+            self.ax.arrow(x, y, 0, dy, head_width=ABSOLUTE_HEAD_WIDTH, head_length=ABSOLUTE_HEAD_LENGTH, fc='purple', ec='darkviolet', linewidth=3, zorder=10, label='Сила тяжести (G)' if i == 0 else None)
 
     def draw_gravity_forces(self, config: 'BrickConfig', qp_analysis: Dict, max_force_length: float = 0.2):
         # отрисовка силы тяжести для кирпича
@@ -86,7 +101,7 @@ class BrickVisualizer:
 
         # расчет коэффициента масштабирования
         if max_lambda < 1e-6:
-            scale = 0.0
+            scale = 0.02
         else:
             scale = max_force_length / max_lambda 
 
@@ -266,8 +281,10 @@ class BrickVisualizer:
             self.ax.text(x, y, str(i), ha='center', va='center', 
                           fontsize=10, fontweight='bold', color='darkblue', zorder=12) 
         
-        if config.g != 0:
+        if config.g != 0 and len(config.R_list)>3*len(R_list)/2:
             self.draw_gravity_forces(config, qp_analysis, max_force_length)
+        else:
+            self.draw_gravity_forces_no_qp(config)
       
         if contact:
             self.draw_contacts(contact)

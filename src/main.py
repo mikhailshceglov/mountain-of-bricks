@@ -41,6 +41,13 @@ def main():
         print("контакты найдены")
         print()
 
+        R_list = config.R_list
+        if (len(contact.contacts)<3*len(R_list)/2):
+            print("задача не разрешима с помощью солвера")
+            visualizer = BrickVisualizer()
+            visualizer.visualize_system(config, contact)
+            exit(1)
+
         #ищем силы через qp-солвер
         print(f"решаем qp для конфигурации: {config.description}")
         contact_list = contact.contacts
