@@ -164,14 +164,7 @@ MANUAL_APPROX_VIS_TOL: float = 1e1
 
 ### 1. Стенка под углом — `leaning_wall.json`
 
-(Здесь будет картинка с визуализацией сцены `leaning_wall.json`)
-
-Пример вставки позже:
-
-```markdown
 ![leaning_wall](picture/leaning.png)
-*Конфигурация: leaning_wall.json*
-```
 
 ---
 
